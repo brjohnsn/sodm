@@ -239,7 +239,7 @@ proc cliCompact(s: Settings) =
 
 
 when isMainModule:
-  echo "Smart Data Maintenance (sdm)"
+  echo "Smart OmniTrader Data Maintenance"
   var s = Settings(otBasePath: r"C:\Program Files (x86)\Nirvana\OT2019\", currAppPath: os.getAppFilename())
   # command line examples:
   # app install - installs app in current dir
