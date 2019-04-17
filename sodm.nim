@@ -212,7 +212,7 @@ proc compact(s: Settings) =
           echo "Running '", s.dataMaintAppRenamed, "' to compact the following files: "
           for f in files: echo f
           # launch real OTDataMaint program
-          let rslt = execProcess(s.dataMaintAppRenamed, "", [], nil, {poStdErrToStdOut, poEvalCommand, poDemon})
+          let rslt = execProcess(s.dataMaintAppRenamed, "", [], nil, {poStdErrToStdOut, poEvalCommand, poDaemon})
           if rslt != "":
             info("Output from Nirvana data maint: ", rslt)
           # now log the files that were compacted
