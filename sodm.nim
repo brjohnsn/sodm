@@ -8,39 +8,65 @@ import strtabs
 import parseopt
 import logging
 
-const coreOtName = "OTDataMaintenance2019"
-const rCoreOtName = "nirv" & coreOtName
+
+const nirvanaPrefix = "nirv"
 
 type Settings = object
+  coreOtName: string
+  dataMaintApp: string
   otBasePath: string    # the path where OT is installed
   currAppPath: string   # the full path to this application
+
+type GracefulError = object of Exception
+
+func setDataMaintApp(s: var Settings, val: string) =
+  s.dataMaintApp = val
+  var path, dlls, coreOtName: string
+  (path, coreOtName) = splitPath(val)
+  if s.dataMaintApp == "":
+    s.dataMaintApp = joinPath(path, coreOtName)
+  if coreOtName.toLower().endsWith(".exe"):
+    s.coreOtName = substr(coreOtName, 0, len(coreOtName) - 5) # odd substr function wants last index rather than length
+  else:
+    raise newException(GracefulError, "The target file name provided is not an executable")
+  (path, dlls) = splitPath(path)
+  if dlls.toLower() != "dlls":
+    raise newException(GracefulError,"Unexpected folder structure")
+  s.otBasePath = path & os.DirSep
+
+func setDataMaintApp(s: var Settings) =
+  ##
+  ## Initializes settings based upon the current app path.  This is used in all scenarios other than when
+  ## a 'replace' is performed
+  ##
+  if not symlinkExists(s.currAppPath):
+    raise newException(GracefulError, "App must be run via symlink when not performing a replace")
+  setDataMaintApp(s, s.currAppPath)
+
+
+func rCoreOtName(s: Settings): string =
+  nirvanaPrefix & s.coreOtName
 
 func dllPath(s: Settings): string =
   return s.otBasePath & "Dlls" & os.DirSep
 
-func dataMaintApp(s: Settings): string {.inline.} =
-  return dllPath(s) & coreOtName & ".exe"
-
 func dataMaintPdb(s: Settings): string {.inline.} =
-  return dllPath(s) & coreOtName & ".pdb"
+  return dllPath(s) & s.coreOtName & ".pdb"
 
 func dataMaintCfg(s: Settings): string {.inline.} =
-  return dllPath(s) & coreOtName & ".exe.config"
+  return dllPath(s) & s.coreOtName & ".exe.config"
 
 func dataMaintAppRenamed(s: Settings): string {.inline.} =
-  return dllPath(s) & rCoreOtName & ".exe"
+  return dllPath(s) & rCoreOtName(s) & ".exe"
 
 func dataMaintPdbRenamed(s: Settings): string {.inline.} =
-  return dllPath(s) & rCoreOtName & ".pdb"
+  return dllPath(s) & rCoreOtName(s) & ".pdb"
 
 func dataMaintCfgRenamed(s: Settings): string {.inline.} =
-  return dllPath(s) & rCoreOtName & ".exe.config"
-
-func installedApp(s: Settings): string {.inline.} =
-  return s.dllPath & splitPath(s.currAppPath).tail
+  return dllPath(s) & rCoreOtName(s) & ".exe.config"
 
 func timeFileName(s: Settings): string {.inline.} =
-  return s.otBasePath & ".sdm.txt"
+  return s.otBasePath & ".sodm.txt"
 
 
 proc updateConfigXml(xml: XmlNode, otPath: string, asOfTime: Time): seq[string] =
@@ -115,15 +141,15 @@ proc getUpdateTime(s: Settings): Time =
       result = getLastModificationTime(s.otBasePath & "Brokerage/Brokerage.otd")
 
 
-proc install(s: Settings) =
+proc replace(s: Settings): bool =
   # rename old app, pdb, and config
-  # start with the PDB file. If there isn't one we assume that an install has already been done
+  # start with the PDB file. If there isn't one we assume that a replace has already been done
   if os.existsFile(s.dataMaintPdb):
     if os.existsFile(s.dataMaintPdbRenamed):
       os.removeFile(s.dataMaintPdbRenamed)
     os.moveFile(s.dataMaintPdb, s.dataMaintPdbRenamed)
   else:
-    echo "Already installed, exiting"; return
+    echo "Already replaced, exiting"; return false
   if os.existsFile(s.dataMaintApp):
     if os.existsFile(s.dataMaintAppRenamed):
       os.removeFile(s.dataMaintAppRenamed)
@@ -138,53 +164,56 @@ proc install(s: Settings) =
   if not s.currAppPath.startsWith(s.dllPath):
     destPath = s.dllPath() & splitPath(s.currAppPath).tail
     os.copyFile(s.currAppPath, destPath)
-  # make a link to the installed app and name it the same as Nirvana's app
+  # make a link to the replaced app and name it the same as Nirvana's app
   os.createSymlink(destPath, s.dataMaintApp)
+  return true
 
 
-proc uninstall(s: Settings) =
-  # uninstall should be run directly from the installed app location
-  if s.currAppPath != s.installedApp:
-    writeLine(stderr, "Not running from the correct folder"); return
+proc restore(s: Settings): bool =
+  # restore should be run directly from the installed app location
+  if s.currAppPath != s.dataMaintApp:
+    raise newException(GracefulError, "Not running from the correct folder")
   if os.existsFile(s.dataMaintPdb) or os.existsFile(s.dataMaintCfg):
-    writeLine(stderr, "The application does not appear to be installed - no action taken"); return
+    raise newException(GracefulError, "The application does not appear to be replaced - no action taken")
   os.moveFile(s.dataMaintPdbRenamed, s.dataMaintPdb)
   os.moveFile(s.dataMaintCfgRenamed, s.dataMaintCfg)
   os.removeFile(s.dataMaintApp)
   os.moveFile(s.dataMaintAppRenamed, s.dataMaintApp)
+  return true
 
 
-proc cliInstall(p: var OptParser, s: var Settings) =
-  while true:
-    p.next()
-    case p.kind
-      of cmdLongOption, cmdShortOption:
-        if p.key != "basedir":
-          writeLine(stderr, "Invalid option: ", p.key); return
-        s.otBasePath = p.val
-      of cmdArgument:
-        writeLine(stderr, "Only one command may be given")
-      of cmdEnd:
-        break
-  install(s)
-  echo "Install complete"
+proc cliReplaceUsage(s: Settings) =
+  echo """Usage:
+  sodm replace appPath
+  where appPath is the path to the OTDataMaintenanceXXXX.exe file to be replaced.
+Examples:
+  sodm replace "c:\Program Files (x86)\Nirvana\OT2019\Dlls\OTDataMaintenance2019.exe""""
+
+proc resolvePath(path: string): string =
+  if isAbsolute(path):
+    return path
+  return absolutePath(normalizedPath(path))
+
+proc cliReplace(p: var OptParser, s: var Settings) =
+  p.next()
+  case p.kind
+    of cmdLongOption, cmdShortOption, cmdEnd:
+      cliReplaceUsage(s)
+    of cmdArgument:
+      s.setDataMaintApp(resolvePath(p.key))
+  if replace(s):
+    echo "Replace complete"
 
 
-proc cliUninstall(p: var OptParser, s: Settings) =
-  while true:
-    p.next()
-    case p.kind
-      of cmdLongOption, cmdShortOption:
-        writeLine(stderr, "No options are allowed"); return
-      of cmdArgument:
-        writeLine(stderr, "Only one command may be given"); return
-      of cmdEnd:
-        break
-  uninstall(s)
-  echo "Uninstall complete"
+proc cliRestore(p: var OptParser, s: Settings) =
+  p.next()
+  if p.kind != cmdEnd:
+    raise newException(GracefulError, "Restore takes no arguments")
+  if restore(s):
+    echo "Restore complete"
 
 
-proc compact(s: Settings) =
+proc compact(s: Settings): bool =
   let origFile = s.dataMaintCfgRenamed
 
   # read config file into memory
@@ -231,31 +260,45 @@ proc compact(s: Settings) =
   let f = open(s.timeFileName(), fmWrite)
   writeLine(f, utc(now()))
   f.close()
+  return true
 
 
 proc cliCompact(s: Settings) =
-  compact(s)
-  echo "Compaction complete"
+  if compact(s):
+    echo "Compaction complete"
 
+proc cliUsage(s: Settings) =
+  let usageText =
+    """Usage:
+  sodm [action] [args]
+Actions:
+  replace - replace the specified executable
+  restore - restore the original executable
+  """
+  echo usageText
 
 when isMainModule:
-  echo "Smart OmniTrader Data Maintenance"
-  var s = Settings(otBasePath: r"C:\Program Files (x86)\Nirvana\OT2019\", currAppPath: os.getAppFilename())
-  # command line examples:
-  # app install - installs app in current dir
-  # app install [basedir] - installs app in specified OT dir
-  # app uninstall - removes app from current dir
-  # app - runs as if it is the maintenance program.  Install should have already been performed.
-  var p = initOptParser("", {'b'}, @["basedir"], false)
-  p.next()
-  case p.kind
-    of cmdArgument:
-      case p.key
-        of "install": cliInstall(p, s)
-        of "uninstall": cliUninstall(p, s)
-        of "/Silent": cliCompact(s) # Nirvana passes this option
-    of cmdLongOption, cmdShortOption:
-      writeLine(stderr, "No options are allowed for the default command")
-    of cmdEnd:
-      cliCompact(s)
-
+  echo "Smart OmniTrader Data Maintenance (sodm)"
+  try:
+    var s = Settings(currAppPath: getAppFilename())
+    var p = initOptParser("")
+    p.next()
+    case p.kind
+      of cmdArgument:
+        case p.key
+          of "replace":
+            cliReplace(p, s)
+          of "restore":
+            s.setDataMaintApp()
+            cliRestore(p, s)
+          of "/Silent":
+            s.setDataMaintApp()
+            cliCompact(s) # Nirvana passes this option
+          else: cliUsage(s)
+      of cmdLongOption, cmdShortOption:
+        cliUsage(s)
+      of cmdEnd:
+        s.setDataMaintApp()
+        cliCompact(s)
+  except GracefulError:
+    echo getCurrentExceptionMsg()
