@@ -144,29 +144,43 @@ proc getUpdateTime(s: Settings): Time =
 proc replace(s: Settings): bool =
   # rename old app, pdb, and config
   # start with the PDB file. If there isn't one we assume that a replace has already been done
-  if os.existsFile(s.dataMaintPdb):
+  if not os.existsFile(s.dataMaintPdb):
+    echo "Already replaced, exiting"; return false
+
+  var rollbackActions: seq[proc():void] = @[]
+  try:
+    if os.existsFile(s.dataMaintApp):
+      if os.existsFile(s.dataMaintAppRenamed):
+        os.removeFile(s.dataMaintAppRenamed)
+      os.moveFile(s.dataMaintApp, s.dataMaintAppRenamed)
+      rollbackActions.add(proc() = os.moveFile(s.dataMaintAppRenamed, s.dataMaintApp))
+
+    # copy this app to the DLL dir (if that's not already the running instance)
+    var destPath = s.currAppPath
+    if not s.currAppPath.startsWith(s.dllPath):
+      destPath = s.dllPath() & splitPath(s.currAppPath).tail
+      os.copyFile(s.currAppPath, destPath)
+    # make a link to the replaced app and name it the same as Nirvana's app
+    os.createSymlink(destPath, s.dataMaintApp)
+    rollbackActions.add(proc() = os.removeFile(s.dataMaintApp))
+
+    # we already know the PDB exists at this point
     if os.existsFile(s.dataMaintPdbRenamed):
       os.removeFile(s.dataMaintPdbRenamed)
     os.moveFile(s.dataMaintPdb, s.dataMaintPdbRenamed)
-  else:
-    echo "Already replaced, exiting"; return false
-  if os.existsFile(s.dataMaintApp):
-    if os.existsFile(s.dataMaintAppRenamed):
-      os.removeFile(s.dataMaintAppRenamed)
-    os.moveFile(s.dataMaintApp, s.dataMaintAppRenamed)
-  if os.existsFile(s.dataMaintCfg):
-    if os.existsFile(s.dataMaintCfgRenamed):
-      os.removeFile(s.dataMaintCfgRenamed)
-    os.moveFile(s.dataMaintCfg, s.dataMaintCfgRenamed)
+    rollbackActions.add(proc() = os.moveFile(s.dataMaintPdbRenamed, s.dataMaintPdb))
 
-  # copy this app to the DLL dir (if that's not already the running instance)
-  var destPath = s.currAppPath
-  if not s.currAppPath.startsWith(s.dllPath):
-    destPath = s.dllPath() & splitPath(s.currAppPath).tail
-    os.copyFile(s.currAppPath, destPath)
-  # make a link to the replaced app and name it the same as Nirvana's app
-  os.createSymlink(destPath, s.dataMaintApp)
-  return true
+    if os.existsFile(s.dataMaintCfg):
+      if os.existsFile(s.dataMaintCfgRenamed):
+        os.removeFile(s.dataMaintCfgRenamed)
+      os.moveFile(s.dataMaintCfg, s.dataMaintCfgRenamed)
+      rollbackActions.add(proc() = os.moveFile(s.dataMaintCfgRenamed, s.dataMaintCfg))
+
+    return true
+  except:
+    for i in countdown(rollbackActions.high, 0):
+      rollbackActions[i]()
+    echo getCurrentExceptionMsg()      
 
 
 proc restore(s: Settings): bool =
@@ -241,7 +255,8 @@ proc compact(s: Settings): bool =
           echo "Running '", s.dataMaintAppRenamed, "' to compact the following files: "
           for f in files: echo f
           # launch real OTDataMaint program
-          let rslt = execProcess(s.dataMaintAppRenamed, "", [], nil, {poStdErrToStdOut, poEvalCommand, poDaemon})
+          let rslt = execProcess(s.dataMaintAppRenamed, "", [], nil, {poStdErrToStdOut, poEvalCommand})
+          #let rslt = execProcess(s.dataMaintAppRenamed, "", [], nil, {poStdErrToStdOut, poEvalCommand, poDaemon})
           if rslt != "":
             info("Output from Nirvana data maint: ", rslt)
           # now log the files that were compacted
