@@ -34,7 +34,7 @@ func setDataMaintApp(s: var Settings, val: string) =
     raise newException(GracefulError,"Unexpected folder structure")
   s.otBasePath = path & os.DirSep
 
-func setDataMaintApp(s: var Settings) =
+proc setDataMaintApp(s: var Settings) =
   ##
   ## Initializes settings based upon the current app path.  This is used in all scenarios other than when
   ## a 'replace' is performed
@@ -114,9 +114,9 @@ proc updateConfigXml(xml: XmlNode, otPath: string, asOfTime: Time): seq[string] 
 
   # now walk the directories and globs specified by Nirvana and generate file elements
   for mask in masks:
-    let glob = '*' & mask
+    let glb = '*' & mask  # the word 'glob' causes build failures on posix systems
     for dir in dirs:
-      for fn in os.walkFiles(otPath & dir & os.DirSep & glob):
+      for fn in os.walkFiles(otPath & dir & os.DirSep & glb):
         addFileElement(fn, proc (): string = fn[otPathLen..^1], result)
 
   # replace the old CompactDB XML node with the new one
